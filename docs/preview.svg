@@ -33,8 +33,10 @@
     <text x="8" y="15" class="inv-tx">■ PULSE // AUDIO ENGINE 1.0   /Users/sreegovindvarier/Music</text>
     <text x="735" y="15" class="inv-tx">[?] HELP  [Q] QUIT</text>
 
-    <!-- Header Divider -->
-    <text x="0" y="34" class="t-dim">──────────────────────────────────────────────────────────────────────────────────────────────────</text>
+    <!-- Temporary Volume Slider -->
+    <text x="0" y="34" class="t-dim">──────────────────────────────────</text>
+    <text x="350" y="34" class="t-bold">VOL [████████░░] 85%</text>
+    <text x="510" y="34" class="t-dim">──────────────────────────────────────────────────────────</text>
 
     <!-- Split View (Files vs Queue) -->
     <!-- Left: Files -->

@@ -55,6 +55,7 @@ class PulseApp:
         self._meta_cache: dict[Path, TrackMetadata] = {}
         self.status_message: str = ""
         self.status_time: float = 0.0
+        self.volume_overlay_time: float = 0.0
 
         # Dither display configuration
         self.dither_algo: DitherAlgorithm = DitherAlgorithm.ATKINSON
@@ -243,12 +244,12 @@ class PulseApp:
             self._load_directory(self.current_dir)
 
         elif ch in (ord('+'), ord('='), ord(']')):
-            vol = self.audio.change_volume(0.05)
-            self.set_status(f"VOL: {int(vol * 100)}%")
+            self.audio.change_volume(0.05)
+            self.volume_overlay_time = time.time()
 
         elif ch in (ord('-'), ord('_'), ord('[')):
-            vol = self.audio.change_volume(-0.05)
-            self.set_status(f"VOL: {int(vol * 100)}%")
+            self.audio.change_volume(-0.05)
+            self.volume_overlay_time = time.time()
 
         elif ch in (ord('m'), ord('M')):
             muted = self.audio.toggle_mute()
@@ -396,9 +397,24 @@ class PulseApp:
             if track:
                 self.audio.load_track(track)
         elif ch in (ord('d'), ord('x'), curses.KEY_DC):
+            removing_current = self.queue_cursor == self.queue.current_index
+            previous_audio_state = self.audio.state
+            if removing_current:
+                self.queue.next_track()
+
             removed = self.queue.remove_at(self.queue_cursor)
             if removed:
                 self.set_status(f"REMOVED: {removed.title}")
+                if self.queue.count == 0:
+                    self.audio.unload()
+                elif removing_current:
+                    replacement = self.queue.current_track
+                    if replacement:
+                        self.audio.load_track(replacement)
+                        if previous_audio_state == AudioState.PAUSED:
+                            self.audio.pause()
+                        elif previous_audio_state == AudioState.STOPPED:
+                            self.audio.stop()
             self.queue_cursor = min(self.queue_cursor, max(0, self.queue.count - 1))
         elif ch in (ord('c'), ord('C')):
             self.queue.clear()
@@ -504,8 +520,14 @@ class PulseApp:
         if w > len(title) + len(right_hint):
             self._safe_addstr(0, w - len(right_hint), right_hint, curses.color_pair(2) | curses.A_BOLD)
 
-        # Divider line
-        self._safe_addstr(1, 0, "─" * w, curses.A_DIM)
+        # Brief volume slider replaces the divider after volume changes.
+        if time.time() - self.volume_overlay_time < 1.5:
+            level = max(0, min(10, int(round(self.audio.volume * 10))))
+            slider = f" VOL [{('█' * level) + ('░' * (10 - level))}] {int(self.audio.volume * 100)}% "
+            self._safe_addstr(1, 0, "─" * w, curses.A_DIM)
+            self._safe_addstr(1, max(0, (w - len(slider)) // 2), slider, curses.color_pair(2) | curses.A_BOLD)
+        else:
+            self._safe_addstr(1, 0, "─" * w, curses.A_DIM)
 
     def _render_browser_pane(self, top: int, left: int, height: int, width: int) -> None:
         """Render 1-bit pixel box for file browser."""
