@@ -206,8 +206,8 @@ Because standard terminal fonts exhibit an aspect ratio of approximately $1:2$ (
 | `M` | Mute / Unmute | Toggles attenuation with previous state restoration |
 | `N` | Skip to Next | `QueueManager.next_track(auto_advance=False)` |
 | `P` | Previous Track | Rewinds to $0.0\text{ s}$ if $> 3.0\text{ s}$ into track, else previous |
-| `R` | Cycle Repeat Mode | `OFF` $\rightarrow$ `TRACK` $\rightarrow$ `QUEUE` $\rightarrow$ `OFF` |
-| `L` | Toggle Current Track Loop | Repeats the currently playing song until toggled off; the playback display shows `↻` while enabled |
+| `R` | Cycle Queue Repeat | Cycles queue behavior: `OFF` $\rightarrow$ `TRACK` $\rightarrow$ `QUEUE` $\rightarrow$ `OFF` |
+| `L` | Toggle Current Song Loop | Repeats the current song at its end; press `L` again to turn it off. The playback display shows `↻` while enabled |
 | `S` | Toggle Shuffle | Toggles Fisher-Yates permutation vector with cursor retention |
 | `O` | Cycle Visualizer | Cycles visualizer: `SPECTRUM` (64-band FFT), `WAVEFORM` (Oscilloscope), `STEREO_VU` (dB meters) |
 | `T` | Cycle Dithering | Cycles halftone mode: `ATKINSON` (Mac 1984 75%), `FLOYD_STEINBERG`, `BAYER` (4x4 ordered) |

@@ -307,6 +307,7 @@ class PulseApp:
         elif ch in (ord('l'), ord('L')):
             self.loop_current_track = not self.loop_current_track
             self.set_status(f"TRACK LOOP: {'ON' if self.loop_current_track else 'OFF'}")
+            return True
 
         if self.active_pane == 0:
             self._handle_browser_input(ch)
