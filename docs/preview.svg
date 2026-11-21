@@ -33,25 +33,27 @@
     <text x="8" y="15" class="inv-tx">■ PULSE // AUDIO ENGINE 1.0   /Users/sreegovindvarier/Music</text>
     <text x="735" y="15" class="inv-tx">[?] HELP  [Q] QUIT</text>
 
-    <!-- Header Divider -->
-    <text x="0" y="34" class="t-dim">──────────────────────────────────────────────────────────────────────────────────────────────────</text>
+    <!-- Temporary Volume Slider -->
+    <text x="0" y="34" class="t-dim">──────────────────────────────────</text>
+    <text x="350" y="34" class="t-bold">VOL [████████░░] 85%</text>
+    <text x="510" y="34" class="t-dim">──────────────────────────────────────────────────────────</text>
 
     <!-- Split View (Files vs Queue) -->
     <!-- Left: Files -->
     <text x="0" y="52" class="t-bold">┌─[ 1: FILES ]──────────────────────────────┐</text>
-    <text x="0" y="70" class="t-dim">│  [DIR] ..                                 │</text>
-    <text x="0" y="88" class="t-norm">│  [DIR] Phonk/                             │</text>
-    <text x="0" y="106" class="t-norm">│  [DIR] Synthwave/                         │</text>
+    <text x="0" y="70" class="t-bold">│ / Search songs...                        │</text>
+    <text x="0" y="88" class="t-dim">│  [DIR] ..                                 │</text>
+    <text x="0" y="106" class="t-norm">│  [DIR] Phonk/                             │</text>
+    <text x="0" y="124" class="t-norm">│  [DIR] Synthwave/                         │</text>
 
     <!-- Highlighted Active Cursor -->
-    <rect x="18" y="111" width="372" height="18" class="inv-bg" />
-    <text x="0" y="124" class="t-bold">│</text>
-    <text x="22" y="124" class="inv-tx">▶ [FLAC] phonky-business.flac</text>
-    <text x="390" y="124" class="t-bold">│</text>
+    <rect x="18" y="129" width="372" height="18" class="inv-bg" />
+    <text x="0" y="142" class="t-bold">│</text>
+    <text x="22" y="142" class="inv-tx">▶ [FLAC] phonky-business.flac</text>
+    <text x="390" y="142" class="t-bold">│</text>
 
-    <text x="0" y="142" class="t-norm">│  [MP3]  phonky-business.mp3               │</text>
-    <text x="0" y="160" class="t-norm">│  [MP3]  0405 (2).MP3.mp3                  │</text>
-    <text x="0" y="178" class="t-norm">│  [DIR]  Downloads/                        │</text>
+    <text x="0" y="160" class="t-norm">│  [MP3]  phonky-business.mp3               │</text>
+    <text x="0" y="178" class="t-norm">│  [MP3]  0405 (2).MP3.mp3                  │</text>
     <text x="0" y="196" class="t-bold">└───────────────────────────────────────────┘</text>
 
     <!-- Right: Queue -->
@@ -67,13 +69,13 @@
       <text x="0" y="196" class="t-dim">└───────────────────────────────────────────┘</text>
     </g>
 
-    <!-- Spectrum Analyzer Box -->
+    <!-- Now Playing Progress Box (replaces spectrum visualizer) -->
     <g transform="translate(0, 204)">
-      <text x="0" y="12" class="t-bold">┌─[ SPECTRUM ANALYZER ]─────────────────────────────────────────────────────────────────────────┐</text>
-      <text x="0" y="32" class="t-bold">│         ▀▀    ██             ▀▀    ██       ▀▀             ██    ▀▀    ██             ██        │</text>
-      <text x="0" y="50" class="t-bold">│   ▀▀    ██ ▀▀ ██ ▀▀    ██    ██    ██ ▀▀    ██ ▀▀    ██    ██    ██    ██ ▀▀    ██    ██ ▀▀     │</text>
-      <text x="0" y="68" class="t-bold">│   ██ ▀▀ ██ ██ ██ ██ ▀▀ ██ ▀▀ ██ ▀▀ ██ ██ ▀▀ ██ ██ ▀▀ ██ ▀▀ ██ ▀▀ ██ ▀▀ ██ ██ ▀▀ ██ ▀▀ ██ ██ ▀▀  │</text>
-      <text x="0" y="86" class="t-bold">│   ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██   │</text>
+      <text x="0" y="12" class="t-bold">┌─[ NOW PLAYING ]────────────────────────────────────────────────────────────────────────────────┐</text>
+      <text x="0" y="32" class="t-bold">│ Phrozen — Phonky Business                                                                    │</text>
+      <text x="0" y="52" class="t-norm">│ PLAYING [███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 00:24 / 02:08                        │</text>
+      <text x="0" y="72" class="t-norm">│                                                                                               │</text>
+      <text x="0" y="92" class="t-norm">│                                                                                               │</text>
       <text x="0" y="102" class="t-bold">└───────────────────────────────────────────────────────────────────────────────────────────────┘</text>
     </g>
 

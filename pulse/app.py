@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import curses
-import math
 import os
 import sys
 import time
@@ -11,7 +10,6 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from pulse.audio import AudioEngine, AudioState
-from pulse.dsp import VisualizerMode
 from pulse.metadata import DitherAlgorithm, TrackLyrics, TrackMetadata, format_duration
 from pulse.queue_manager import QueueManager, RepeatMode
 
@@ -57,16 +55,12 @@ class PulseApp:
         self._meta_cache: dict[Path, TrackMetadata] = {}
         self.status_message: str = ""
         self.status_time: float = 0.0
+        self.volume_overlay_time: float = 0.0
 
-        # Visualizer & Dither display configuration
+        # Dither display configuration
         self.dither_algo: DitherAlgorithm = DitherAlgorithm.ATKINSON
         self.pane_3_view: str = "ART"  # "ART" or "LYRICS"
         self._last_terminal_title: str = ""
-
-        # Spectrum peak-hold state for retro 1-bit hardware meters
-        self.idle_t: float = 0.0
-        self.peak_levels: List[float] = [0.0] * 128
-        self.peak_hold_frames: List[int] = [0] * 128
 
         self._load_directory(self.current_dir)
 
@@ -244,16 +238,18 @@ class PulseApp:
             self.set_status("PANE: [3] ALBUM ART")
 
         elif ch == ord('/'):
+            self.active_pane = 0
             self.is_filtering = True
             self.filter_query = ""
+            self._load_directory(self.current_dir)
 
         elif ch in (ord('+'), ord('='), ord(']')):
-            vol = self.audio.change_volume(0.05)
-            self.set_status(f"VOL: {int(vol * 100)}%")
+            self.audio.change_volume(0.05)
+            self.volume_overlay_time = time.time()
 
         elif ch in (ord('-'), ord('_'), ord('[')):
-            vol = self.audio.change_volume(-0.05)
-            self.set_status(f"VOL: {int(vol * 100)}%")
+            self.audio.change_volume(-0.05)
+            self.volume_overlay_time = time.time()
 
         elif ch in (ord('m'), ord('M')):
             muted = self.audio.toggle_mute()
@@ -284,10 +280,6 @@ class PulseApp:
         elif ch in (ord('s'), ord('S')):
             shuf = self.queue.toggle_shuffle()
             self.set_status(f"SHUFFLE: {'ON' if shuf else 'OFF'}")
-
-        elif ch in (ord('o'), ord('O')):
-            mode = self.audio.cycle_visualizer_mode()
-            self.set_status(f"VISUALIZER: {mode.value}")
 
         elif ch in (ord('t'), ord('T')):
             self.dither_algo = self.dither_algo.next_algorithm()
@@ -405,9 +397,24 @@ class PulseApp:
             if track:
                 self.audio.load_track(track)
         elif ch in (ord('d'), ord('x'), curses.KEY_DC):
+            removing_current = self.queue_cursor == self.queue.current_index
+            previous_audio_state = self.audio.state
+            if removing_current:
+                self.queue.next_track()
+
             removed = self.queue.remove_at(self.queue_cursor)
             if removed:
                 self.set_status(f"REMOVED: {removed.title}")
+                if self.queue.count == 0:
+                    self.audio.unload()
+                elif removing_current:
+                    replacement = self.queue.current_track
+                    if replacement:
+                        self.audio.load_track(replacement)
+                        if previous_audio_state == AudioState.PAUSED:
+                            self.audio.pause()
+                        elif previous_audio_state == AudioState.STOPPED:
+                            self.audio.stop()
             self.queue_cursor = min(self.queue_cursor, max(0, self.queue.count - 1))
         elif ch in (ord('c'), ord('C')):
             self.queue.clear()
@@ -473,9 +480,9 @@ class PulseApp:
             else:
                 self._render_art_pane(2, 0, main_h, w)
 
-        # 3. Retro 1-Bit Spectrum Analyzer
+        # 3. Now playing title and playback progress
         vis_y = 2 + main_h
-        self._render_spectrum_box(vis_y, 0, vis_h, w)
+        self._render_playback_box(vis_y, 0, vis_h, w)
 
         # 4. Playback Scrubber & Telemetry Box
         tele_y = vis_y + vis_h
@@ -513,21 +520,31 @@ class PulseApp:
         if w > len(title) + len(right_hint):
             self._safe_addstr(0, w - len(right_hint), right_hint, curses.color_pair(2) | curses.A_BOLD)
 
-        # Divider line
-        self._safe_addstr(1, 0, "─" * w, curses.A_DIM)
+        # Brief volume slider replaces the divider after volume changes.
+        if time.time() - self.volume_overlay_time < 1.5:
+            level = max(0, min(10, int(round(self.audio.volume * 10))))
+            slider = f" VOL [{('█' * level) + ('░' * (10 - level))}] {int(self.audio.volume * 100)}% "
+            self._safe_addstr(1, 0, "─" * w, curses.A_DIM)
+            self._safe_addstr(1, max(0, (w - len(slider)) // 2), slider, curses.color_pair(2) | curses.A_BOLD)
+        else:
+            self._safe_addstr(1, 0, "─" * w, curses.A_DIM)
 
     def _render_browser_pane(self, top: int, left: int, height: int, width: int) -> None:
         """Render 1-bit pixel box for file browser."""
         is_active = (self.active_pane == 0)
         box_attr = curses.A_BOLD if is_active else curses.A_DIM
 
-        # Frame Header
-        filt = f" [QUERY: {self.filter_query}]" if self.filter_query else ""
-        title = f"┌─[ 1: FILES {filt}]"
+        # Frame Header and always-visible song search field
+        title = "┌─[ 1: FILES ]"
         rem_w = max(0, width - len(title) - 1)
         self._safe_addstr(top, left, f"{title}{'─' * rem_w}┐", box_attr)
 
-        content_h = height - 2
+        search_label = f"/ Search songs: {self.filter_query}" if self.filter_query else "/ Search songs..."
+        search_text = f"│ {search_label:<{width - 4}} │"
+        search_attr = curses.color_pair(2) | curses.A_BOLD if self.is_filtering else curses.A_BOLD
+        self._safe_addstr(top + 1, left, search_text, search_attr)
+
+        content_h = height - 3
         count = len(self.browser_items)
 
         if self.browser_cursor < self.browser_scroll:
@@ -536,7 +553,7 @@ class PulseApp:
             self.browser_scroll = self.browser_cursor - content_h + 1
 
         for idx in range(content_h):
-            row_y = top + 1 + idx
+            row_y = top + 2 + idx
             item_idx = self.browser_scroll + idx
 
             if item_idx < count:
@@ -753,158 +770,31 @@ class PulseApp:
 
         self._safe_addstr(top + height - 1, left, "└" + ("─" * (width - 2)) + "┘", box_attr)
 
-    def _render_spectrum_box(self, top: int, left: int, height: int, width: int) -> None:
-        """Render retro 1-bit visualizer: 64-band FFT Spectrum, Oscilloscope, or Stereo VU meters."""
-        mode = self.audio.get_visualizer_mode()
-        plot_h = max(2, height - 2)
-        inner_w = width - 4
-        is_playing = (self.audio.state == AudioState.PLAYING)
+    def _render_playback_box(self, top: int, left: int, height: int, width: int) -> None:
+        """Render the current song title, timestamp, and a monochrome progress bar."""
+        track = self.queue.current_track
+        curr_sec, total_sec, pct = self.audio.get_progress()
+        state = self.audio.state
+        state_tag = "PLAYING" if state == AudioState.PLAYING else "PAUSED" if state == AudioState.PAUSED else "STOPPED"
+        title = "┌─[ NOW PLAYING ]"
+        self._safe_addstr(top, left, f"{title}{'─' * max(0, width - len(title) - 1)}┐", curses.A_BOLD)
 
-        # -------------------------------------------------------------
-        # Mode 1: Oscilloscope (Real-Time PCM Waveform)
-        # -------------------------------------------------------------
-        if mode == VisualizerMode.WAVEFORM:
-            title = "┌─[ OSCILLOSCOPE (PCM WAVEFORM) ]"
-            rem_w = max(0, width - len(title) - 1)
-            self._safe_addstr(top, left, f"{title}{'─' * rem_w}┐", curses.A_NORMAL)
+        inner_w = max(1, width - 4)
+        song = f"{track.artist} — {track.title}" if track and track.artist != "Unknown Artist" else (track.title if track else "No track loaded")
+        stamp = f"{format_duration(curr_sec)} / {format_duration(total_sec)}"
+        bar_w = max(1, inner_w - len(stamp) - len(state_tag) - 4)
+        filled = min(bar_w, int(bar_w * pct / 100))
+        bar = "█" * filled + "░" * (bar_w - filled)
+        progress_line = f"{state_tag} [{bar}] {stamp}"
 
-            if is_playing:
-                wave_lines = self.audio.get_waveform_lines(inner_w, plot_h)
-            else:
-                self.idle_t += 0.08
-                grid = [[" " for _ in range(inner_w)] for _ in range(plot_h)]
-                mid_y = plot_h // 2
-                for x in range(inner_w):
-                    val = math.sin(self.idle_t + (x * 0.12)) * 0.45 + math.cos(self.idle_t * 0.6 + (x * 0.22)) * 0.25
-                    row_idx = max(0, min(plot_h - 1, int(round(mid_y - (val * (plot_h / 2.1))))))
-                    grid[row_idx][x] = "─" if row_idx == mid_y else ("▀" if row_idx < mid_y else "▄")
-                wave_lines = ["".join(row) for row in grid]
-
-            for r in range(plot_h):
-                row_y = top + 1 + r
-                line_str = wave_lines[r] if r < len(wave_lines) else (" " * inner_w)
-                self._safe_addstr(row_y, left, f"│ {line_str[:inner_w]:<{inner_w}} │", curses.A_BOLD)
-            self._safe_addstr(top + height - 1, left, "└" + ("─" * (width - 2)) + "┘", curses.A_NORMAL)
-            return
-
-        # -------------------------------------------------------------
-        # Mode 2: Stereo Analog VU Level Meters
-        # -------------------------------------------------------------
-        if mode == VisualizerMode.STEREO_VU:
-            title = "┌─[ STEREO ANALOG VU LEVEL METERS ]"
-            rem_w = max(0, width - len(title) - 1)
-            self._safe_addstr(top, left, f"{title}{'─' * rem_w}┐", curses.A_NORMAL)
-
-            p_l, p_r, db_l, db_r = self.audio.get_stereo_levels()
-            meter_w = max(8, inner_w - 36)
-            frac_l = max(0.0, min(1.0, (db_l + 60.0) / 63.0))
-            frac_r = max(0.0, min(1.0, (db_r + 60.0) / 63.0))
-            fill_l = int(round(frac_l * meter_w))
-            fill_r = int(round(frac_r * meter_w))
-            bar_l = ("█" * fill_l) + ("░" * (meter_w - fill_l))
-            bar_r = ("█" * fill_r) + ("░" * (meter_w - fill_r))
-
-            clip_l = "[CLIP!]" if (p_l >= 0.98 or db_l >= -0.1) else "       "
-            clip_r = "[CLIP!]" if (p_r >= 0.98 or db_r >= -0.1) else "       "
-
-            scale_ticks = "-60   -40   -20   -12    -6    -3     0   +3 dB"
-            line_scale = f"    {scale_ticks[:meter_w]:<{meter_w}}"
-            line_l = f"L: [{bar_l}] {db_l:+5.1f} dB  PK:{p_l:4.2f} {clip_l}"
-            line_r = f"R: [{bar_r}] {db_r:+5.1f} dB  PK:{p_r:4.2f} {clip_r}"
-
-            lines = [line_l, line_scale, line_r]
-            pad_top = max(0, (plot_h - len(lines)) // 2)
-            for r in range(plot_h):
-                row_y = top + 1 + r
-                idx = r - pad_top
-                if 0 <= idx < len(lines):
-                    txt = lines[idx][:inner_w]
-                    attr = curses.A_BOLD if idx in (0, 2) else curses.A_DIM
-                else:
-                    txt = " " * inner_w
-                    attr = curses.A_NORMAL
-                self._safe_addstr(row_y, left, f"│ {txt:<{inner_w}} │", attr)
-
-            self._safe_addstr(top + height - 1, left, "└" + ("─" * (width - 2)) + "┘", curses.A_NORMAL)
-            return
-
-        # -------------------------------------------------------------
-        # Mode 3: 64-Band Cooley-Tukey Radix-2 FFT Spectrum Analyzer
-        # -------------------------------------------------------------
-        title = "┌─[ SPECTRUM ANALYZER (64-BAND LOG FFT) ]"
-        rem_w = max(0, width - len(title) - 1)
-        self._safe_addstr(top, left, f"{title}{'─' * rem_w}┐", curses.A_NORMAL)
-
-        raw_levels = self.audio.get_visualizer_levels()
-        bar_w = 2  # Each bar is 2 characters wide
-        bar_stride = bar_w + 1  # 2 columns bar + 1 column gap
-        num_bars = min(64, inner_w // bar_stride)
-        if num_bars <= 0:
-            return
-
-        # Resample / interpolate raw_levels across num_bars
-        levels = []
-        if is_playing and raw_levels:
-            raw_len = len(raw_levels)
-            for b in range(num_bars):
-                src_idx = int(b * raw_len / num_bars)
-                levels.append(raw_levels[min(raw_len - 1, src_idx)])
-        else:
-            # Animated 1-bit hardware wave when idle / stopped
-            self.idle_t += 0.08
-            for b in range(num_bars):
-                w1 = math.sin(self.idle_t + (b * 0.25)) * 0.28
-                w2 = math.cos((self.idle_t * 0.7) + (b * 0.5)) * 0.15
-                val = max(0.12, min(0.95, 0.45 + w1 + w2))
-                levels.append(val)
-
-        # Update peak hold decay
-        while len(self.peak_levels) < num_bars:
-            self.peak_levels.append(0.0)
-            self.peak_hold_frames.append(0)
-
-        for b in range(num_bars):
-            lvl = levels[b]
-            if lvl >= self.peak_levels[b]:
-                self.peak_levels[b] = lvl
-                self.peak_hold_frames[b] = 8
-            else:
-                if self.peak_hold_frames[b] > 0:
-                    self.peak_hold_frames[b] -= 1
-                else:
-                    self.peak_levels[b] = max(0.0, self.peak_levels[b] - 0.08)
-
-        for row in range(plot_h):
-            row_y = top + 1 + row
-            line_row = plot_h - 1 - row  # 0 is bottom row, plot_h-1 is top row
-            row_cells = []
-
-            for b in range(num_bars):
-                val = levels[b]
-                bar_h = val * plot_h
-                fill = bar_h - line_row
-
-                # Peak hold dot
-                peak_row = int(self.peak_levels[b] * plot_h)
-                is_peak = (peak_row == line_row and peak_row > 0)
-
-                if fill >= 1.0:
-                    char = "█" * bar_w
-                elif fill > 0.0:
-                    idx = min(8, max(0, int(fill * 8)))
-                    char = self.BLOCKS[idx] * bar_w
-                elif is_peak:
-                    char = "▀" * bar_w
-                else:
-                    char = " " * bar_w
-                row_cells.append(char + " ")
-
-            spectrum_line = "".join(row_cells)
-            pad_left = max(0, (inner_w - len(spectrum_line)) // 2)
-            pad_right = max(0, inner_w - len(spectrum_line) - pad_left)
-            full_line = "│ " + (" " * pad_left) + spectrum_line + (" " * pad_right) + " │"
-            self._safe_addstr(row_y, left, full_line, curses.A_BOLD if line_row <= 1 else curses.A_NORMAL)
-
+        if height >= 5:
+            self._safe_addstr(top + 1, left, f"│ {song[:inner_w]:<{inner_w}} │", curses.A_BOLD)
+            self._safe_addstr(top + 2, left, f"│ {progress_line:<{inner_w}} │", curses.A_NORMAL)
+            for row in range(top + 3, top + height - 1):
+                self._safe_addstr(row, left, "│" + (" " * (width - 2)) + "│", curses.A_NORMAL)
+        elif height >= 4:
+            self._safe_addstr(top + 1, left, f"│ {song[:inner_w]:<{inner_w}} │", curses.A_BOLD)
+            self._safe_addstr(top + 2, left, f"│ {progress_line:<{inner_w}} │", curses.A_NORMAL)
         self._safe_addstr(top + height - 1, left, "└" + ("─" * (width - 2)) + "┘", curses.A_NORMAL)
 
     def _render_telemetry_box(self, top: int, left: int, height: int, width: int) -> None:
@@ -976,10 +866,9 @@ class PulseApp:
                 rep_str = f"LOOP:{self.queue.repeat_mode.name}"
                 shuf_str = f"SHUF:{'ON' if self.queue.is_shuffled else 'OFF'}"
                 trk_str = f"TRK:{self.queue.current_index + 1:02d}/{self.queue.count:02d}" if self.queue.count else "TRK:--/--"
-                vis_str = f"VIS:{self.audio.get_visualizer_mode().value[:4]}"
                 dith_str = f"DITH:{self.dither_algo.value[:3]}"
                 cover_hint = "[V] ART"
-                row3 = f"{vol_str} │ {rep_str} │ {shuf_str} │ {vis_str} │ {dith_str} │ {trk_str} │ {cover_hint}"
+                row3 = f"{vol_str} │ {rep_str} │ {shuf_str} │ {dith_str} │ {trk_str} │ {cover_hint}"
 
             rows = [row0, row1, row2, row3]
             while len(rows) < inner_h:
@@ -1113,7 +1002,7 @@ class PulseApp:
 
     def _render_footer(self, y: int, width: int) -> None:
         """High-contrast solid pixel command bar."""
-        cmd_text = " [SPACE] PLAY  [O] VISUALIZER  [T] DITHER  [L] LYRICS  [V] ART  [TAB] PANE  [+/-] VOL  [?] HELP  [Q] QUIT "
+        cmd_text = " [SPACE] PLAY  [T] DITHER  [L] LYRICS  [V] ART  [TAB] PANE  [+/-] VOL  [?] HELP  [Q] QUIT "
         self._safe_addstr(y, 0, " " * width, curses.color_pair(2))
         self._safe_addstr(y, 0, cmd_text[:width], curses.color_pair(2) | curses.A_BOLD)
 
@@ -1137,7 +1026,6 @@ class PulseApp:
             "  N / P          NEXT / PREV TRACK",
             "  R              CYCLE REPEAT (OFF -> TRACK -> QUEUE)",
             "  S              TOGGLE SHUFFLE (BIJECTIVE PERMUTATION)",
-            "  O              CYCLE VISUALIZER (SPECTRUM -> WAVEFORM -> STEREO VU)",
             "  T              CYCLE DITHER ALGORITHM (ATKINSON -> FLOYD-S -> BAYER)",
             "  L              TOGGLE PANE 3 (ALBUM ART <-> SYNCHRONIZED LYRICS)",
             "  G              TOGGLE REPLAYGAIN LOUDNESS NORMALIZATION",
@@ -1150,7 +1038,7 @@ class PulseApp:
             "  A              QUEUE FILE OR ENTIRE DIR",
             "  TAB            CYCLE PANE (FILES -> QUEUE -> ART/LYRICS)",
             "  1 / 2 / 3      SELECT PANE DIRECTLY (1:FILES, 2:QUEUE, 3:ART/LYRICS)",
-            "  /              ACTIVATE SEARCH FILTER",
+            "  /              SEARCH SONG FILENAMES IN THE FILES PANE",
             "  D / X          REMOVE TRACK FROM QUEUE",
             "  C              CLEAR ALL QUEUE ITEMS",
             "  Q              QUIT",

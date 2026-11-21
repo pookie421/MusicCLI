@@ -220,7 +220,7 @@ Because standard terminal fonts exhibit an aspect ratio of approximately $1:2$ (
 | `Enter` / `l` | Activate / Play | Traverses inode or loads selected track into audio engine |
 | `Backspace` / `h` | Ascend Directory | Resolves `path.parent` and re-indexes inode listing |
 | `A` | Recursive Enqueue | Traverses file or directory tree and enqueues supported audio |
-| `/` | Search Filter | Initializes dynamic substring filtering on active directory |
+| `/` | Search Songs | Opens the FILES search bar and filters filenames in the current directory as you type |
 | `D` / `X` | Remove Queue Track | Pops item from queue, recalculates shuffle indices and cursor |
 | `C` | Flush Queue | Purges queue vector, calls `AudioEngine.unload()` to free PCM buffers |
 | `?` | Keyboard Matrix | Displays modal curses overlay of keybindings |
