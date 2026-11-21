@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import curses
-import os
 import sys
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from pulse.audio import AudioEngine, AudioState
-from pulse.metadata import DitherAlgorithm, TrackLyrics, TrackMetadata, format_duration
+from pulse.metadata import DitherAlgorithm, TrackMetadata, format_duration
 from pulse.queue_manager import QueueManager, RepeatMode
+from pulse.listening_history import ListeningHistory
 
 
 class PulseApp:
@@ -47,8 +47,12 @@ class PulseApp:
         self.queue_cursor: int = 0
         self.queue_scroll: int = 0
 
-        # Pane focus: 0 = Browser, 1 = Queue, 2 = Album Art
+        # Pane focus: 0 = Browser, 1 = Queue, 2 = Listening History
         self.active_pane: int = 0
+        self.history = ListeningHistory()
+        self.history_cursor: int = 0
+        self.history_scroll: int = 0
+        self.loop_current_track: bool = False
         self.show_help: bool = False
         self.show_cover_modal: bool = False
         self.cover_modal_track: Optional[TrackMetadata] = None
@@ -59,7 +63,6 @@ class PulseApp:
 
         # Dither display configuration
         self.dither_algo: DitherAlgorithm = DitherAlgorithm.ATKINSON
-        self.pane_3_view: str = "ART"  # "ART" or "LYRICS"
         self._last_terminal_title: str = ""
 
         self._load_directory(self.current_dir)
@@ -68,7 +71,15 @@ class PulseApp:
             meta = TrackMetadata.from_path(self.auto_play_file)
             self.queue.add_track(meta)
             self.queue.current_index = 0
-            self.audio.load_track(meta)
+            self._load_track(meta)
+
+    def _load_track(self, metadata: TrackMetadata) -> bool:
+        """Load a track and record a local listening-history entry on success."""
+        loaded = self.audio.load_track(metadata)
+        if loaded:
+            if not self.history.add(metadata):
+                self.set_status("HISTORY: COULD NOT SAVE ENTRY")
+        return loaded
 
     def set_status(self, msg: str) -> None:
         self.status_message = msg
@@ -152,11 +163,15 @@ class PulseApp:
 
         while True:
             if self.audio.check_and_clear_finished():
-                next_t = self.queue.next_track(auto_advance=True)
-                if next_t:
-                    self.audio.load_track(next_t)
+                if self.loop_current_track and self.queue.current_track:
+                    # Restarting a loop is part of the same listening session.
+                    self.audio.load_track(self.queue.current_track)
                 else:
-                    self.audio.stop()
+                    next_t = self.queue.next_track(auto_advance=True)
+                    if next_t:
+                        self._load_track(next_t)
+                    else:
+                        self.audio.stop()
 
             self._update_terminal_title()
             self._render()
@@ -215,10 +230,10 @@ class PulseApp:
             if self.audio.state == AudioState.STOPPED:
                 track = self.queue.current_track
                 if track:
-                    self.audio.load_track(track)
+                    self._load_track(track)
                 elif self.queue.count > 0:
                     self.queue.current_index = 0
-                    self.audio.load_track(self.queue.tracks[0])
+                    self._load_track(self.queue.tracks[0])
             else:
                 self.audio.toggle_play_pause()
 
@@ -235,7 +250,7 @@ class PulseApp:
 
         elif ch == ord('3'):
             self.active_pane = 2
-            self.set_status("PANE: [3] ALBUM ART")
+            self.set_status("PANE: [3] LISTENING HISTORY")
 
         elif ch == ord('/'):
             self.active_pane = 0
@@ -264,14 +279,14 @@ class PulseApp:
         elif ch in (ord('n'), ord('N')):
             next_t = self.queue.next_track()
             if next_t:
-                self.audio.load_track(next_t)
+                self._load_track(next_t)
             else:
                 self.set_status("QUEUE: END REACHED")
 
         elif ch in (ord('p'), ord('P')):
             prev_t = self.queue.prev_track()
             if prev_t:
-                self.audio.load_track(prev_t)
+                self._load_track(prev_t)
 
         elif ch in (ord('r'), ord('R')):
             mode = self.queue.toggle_repeat()
@@ -285,36 +300,45 @@ class PulseApp:
             self.dither_algo = self.dither_algo.next_algorithm()
             self.set_status(f"DITHER: {self.dither_algo.value}")
 
-        elif ch in (ord('l'), ord('L')):
-            self.pane_3_view = "LYRICS" if self.pane_3_view == "ART" else "ART"
-            self.set_status(f"PANE 3: {self.pane_3_view}")
-
         elif ch in (ord('g'), ord('G')):
             rg_state = self.audio.toggle_replay_gain()
             self.set_status(f"REPLAYGAIN: {'ON' if rg_state else 'OFF'}")
+
+        elif ch in (ord('l'), ord('L')):
+            self.loop_current_track = not self.loop_current_track
+            self.set_status(f"TRACK LOOP: {'ON' if self.loop_current_track else 'OFF'}")
 
         if self.active_pane == 0:
             self._handle_browser_input(ch)
         elif self.active_pane == 1:
             self._handle_queue_input(ch)
         else:
-            self._handle_art_input(ch)
+            self._handle_history_input(ch)
 
         return True
 
-    def _handle_art_input(self, ch: int) -> None:
-        if ch in (10, 13, curses.KEY_ENTER, ord(' ')):
-            if self.audio.state == AudioState.STOPPED:
-                t = self.queue.current_track
-                if t:
-                    self.audio.load_track(t)
+    def _handle_history_input(self, ch: int) -> None:
+        if ch in (curses.KEY_UP, ord('k')):
+            self.history_cursor = max(0, self.history_cursor - 1)
+        elif ch in (curses.KEY_DOWN, ord('j')):
+            self.history_cursor = min(max(0, len(self.history.entries) - 1), self.history_cursor + 1)
+        elif ch in (10, 13, curses.KEY_ENTER) and self.history.entries:
+            entry = self.history.entries[self.history_cursor]
+            path = Path(entry.get("path", ""))
+            if path.is_file():
+                metadata = TrackMetadata.from_path(path)
+                idx = self.queue.add_track(metadata)
+                self.queue.current_index = idx
+                self.queue_cursor = idx
+                self._load_track(metadata)
             else:
-                self.audio.toggle_play_pause()
-        elif ch in (ord('v'), ord('V')):
-            t = self.queue.current_track
-            if t:
-                self.cover_modal_track = t
-                self.show_cover_modal = True
+                self.set_status("HISTORY: FILE NO LONGER EXISTS")
+        elif ch in (ord('c'), ord('C')):
+            if self.history.clear():
+                self.history_cursor = 0
+                self.set_status("HISTORY: CLEARED")
+            else:
+                self.set_status("HISTORY: COULD NOT CLEAR")
 
     def _handle_filter_input(self, ch: int) -> bool:
         if ch in (10, 13, curses.KEY_ENTER):
@@ -351,7 +375,7 @@ class PulseApp:
         elif ch in (curses.KEY_BACKSPACE, 127, 8, ord('h')):
             if self.current_dir.parent != self.current_dir:
                 self._load_directory(self.current_dir.parent)
-        elif ch in (10, 13, curses.KEY_ENTER, ord('l')):
+        elif ch in (10, 13, curses.KEY_ENTER):
             name, path, is_dir = self.browser_items[self.browser_cursor]
             if is_dir:
                 self._load_directory(path)
@@ -359,7 +383,7 @@ class PulseApp:
                 meta = TrackMetadata.from_path(path)
                 idx = self.queue.add_track(meta)
                 self.queue.current_index = idx
-                self.audio.load_track(meta)
+                self._load_track(meta)
         elif ch in (ord('a'), ord('A')):
             name, path, is_dir = self.browser_items[self.browser_cursor]
             if is_dir:
@@ -377,12 +401,6 @@ class PulseApp:
                 self.queue.add_track(meta)
                 self.set_status(f"QUEUED: {meta.title}")
 
-            if self.audio.state == AudioState.STOPPED and self.queue.current_index < 0:
-                self.queue.current_index = 0
-                t = self.queue.current_track
-                if t:
-                    self.audio.load_track(t)
-
     def _handle_queue_input(self, ch: int) -> None:
         count = self.queue.count
         if count == 0:
@@ -395,7 +413,7 @@ class PulseApp:
         elif ch in (10, 13, curses.KEY_ENTER):
             track = self.queue.jump_to(self.queue_cursor)
             if track:
-                self.audio.load_track(track)
+                self._load_track(track)
         elif ch in (ord('d'), ord('x'), curses.KEY_DC):
             removing_current = self.queue_cursor == self.queue.current_index
             previous_audio_state = self.audio.state
@@ -410,7 +428,7 @@ class PulseApp:
                 elif removing_current:
                     replacement = self.queue.current_track
                     if replacement:
-                        self.audio.load_track(replacement)
+                        self._load_track(replacement)
                         if previous_audio_state == AudioState.PAUSED:
                             self.audio.pause()
                         elif previous_audio_state == AudioState.STOPPED:
@@ -444,7 +462,7 @@ class PulseApp:
         # 1. Top Header Box
         self._render_header(w)
 
-        # 2. Main Split View: Files | Queue | Album Art
+        # 2. Main Split View: Files | Queue | Listening History
         if h >= 28:
             vis_h = 6
             tele_h = 5
@@ -463,13 +481,13 @@ class PulseApp:
             col3_w = w - col1_w - col2_w
             self._render_browser_pane(2, 0, main_h, col1_w)
             self._render_queue_pane(2, col1_w, main_h, col2_w)
-            self._render_art_pane(2, col1_w + col2_w, main_h, col3_w)
+            self._render_history_pane(2, col1_w + col2_w, main_h, col3_w)
         elif w >= 70:
             half_w = w // 2
             rem_w = w - half_w
             self._render_browser_pane(2, 0, main_h, half_w)
             if self.active_pane == 2:
-                self._render_art_pane(2, half_w, main_h, rem_w)
+                self._render_history_pane(2, half_w, main_h, rem_w)
             else:
                 self._render_queue_pane(2, half_w, main_h, rem_w)
         else:
@@ -478,7 +496,7 @@ class PulseApp:
             elif self.active_pane == 1:
                 self._render_queue_pane(2, 0, main_h, w)
             else:
-                self._render_art_pane(2, 0, main_h, w)
+                self._render_history_pane(2, 0, main_h, w)
 
         # 3. Now playing title and playback progress
         vis_y = 2 + main_h
@@ -516,7 +534,7 @@ class PulseApp:
         if w > len(title) + len(path_display) + 12:
             self._safe_addstr(0, len(title) + 2, path_display, curses.color_pair(2))
 
-        right_hint = "[?] HELP  [1/2/3] PANES  [V] ART  [Q] QUIT "
+        right_hint = "[?] HELP  [1/2/3] PANES  [V] COVER  [Q] QUIT "
         if w > len(title) + len(right_hint):
             self._safe_addstr(0, w - len(right_hint), right_hint, curses.color_pair(2) | curses.A_BOLD)
 
@@ -639,135 +657,46 @@ class PulseApp:
 
         self._safe_addstr(top + height - 1, left, "└" + ("─" * (width - 2)) + "┘", box_attr)
 
-    def _render_art_pane(self, top: int, left: int, height: int, width: int) -> None:
-        """Render dedicated 1-bit Album Art or Synchronized Lyrics pane."""
-        is_active = (self.active_pane == 2)
+    def _render_history_pane(self, top: int, left: int, height: int, width: int) -> None:
+        """Render recent local playback sessions in pane 3."""
+        is_active = self.active_pane == 2
         box_attr = curses.A_BOLD if is_active else curses.A_DIM
-
-        content_h = height - 2
-        inner_w = width - 2
-
-        # Target track to display
-        target: Optional[TrackMetadata] = None
-        if self.active_pane == 0 and self.browser_items:
-            name, path, is_dir = self.browser_items[self.browser_cursor]
-            if not is_dir and path.suffix.lower() in (".mp3", ".flac"):
-                if path not in self._meta_cache:
-                    self._meta_cache[path] = TrackMetadata.from_path(path)
-                target = self._meta_cache[path]
-        elif self.active_pane == 1 and self.queue.tracks:
-            if 0 <= self.queue_cursor < len(self.queue.tracks):
-                target = self.queue.tracks[self.queue_cursor]
-
-        if not target:
-            target = self.queue.current_track
-
-        # -------------------------------------------------------------
-        # Mode 1: Synchronized Karaoke Lyrics View
-        # -------------------------------------------------------------
-        if self.pane_3_view == "LYRICS":
-            title = "┌─[ 3: LYRICS ]"
-            rem_w = max(0, width - len(title) - 1)
-            self._safe_addstr(top, left, f"{title}{'─' * rem_w}┐", box_attr)
-
-            lyrics = target.load_lyrics() if target else None
-            curr_sec, _, _ = self.audio.get_progress()
-
-            if lyrics and lyrics.lines:
-                window = lyrics.get_window(curr_sec, max_lines=content_h)
-                for r in range(content_h):
-                    row_y = top + 1 + r
-                    if r < len(window):
-                        line_idx, is_current, lyr = window[r]
-                        text = lyr.text or "..."
-                        if is_current:
-                            fmt_text = f"▶ {text}"[:inner_w]
-                            attr = curses.color_pair(2) | curses.A_BOLD
-                        else:
-                            fmt_text = f"  {text}"[:inner_w]
-                            attr = curses.A_NORMAL
-                        pad_r = max(0, inner_w - len(fmt_text))
-                        self._safe_addstr(row_y, left, "│", box_attr)
-                        self._safe_addstr(row_y, left + 1, fmt_text + (" " * pad_r), attr)
-                        self._safe_addstr(row_y, left + width - 1, "│", box_attr)
-                    else:
-                        self._safe_addstr(row_y, left, "│" + (" " * inner_w) + "│", box_attr)
-            else:
-                mid_r = content_h // 2
-                for r in range(content_h):
-                    row_y = top + 1 + r
-                    if r == mid_r - 1:
-                        msg = "[NO LYRICS FOUND]".center(inner_w)
-                    elif r == mid_r:
-                        msg = "Place .lrc in folder or embed ID3".center(inner_w)
-                    elif r == mid_r + 1:
-                        msg = "Press [L] to switch back to ART".center(inner_w)
-                    else:
-                        msg = " " * inner_w
-                    self._safe_addstr(row_y, left, "│" + msg + "│", box_attr)
-
-            self._safe_addstr(top + height - 1, left, "└" + ("─" * (width - 2)) + "┘", box_attr)
-            return
-
-        # -------------------------------------------------------------
-        # Mode 2: 1-Bit Album Art Halftone View
-        # -------------------------------------------------------------
-        title = f"┌─[ 3: ART ({self.dither_algo.value}) ]"
-        rem_w = max(0, width - len(title) - 1)
-        self._safe_addstr(top, left, f"{title}{'─' * rem_w}┐", box_attr)
-
-        info_lines = 3 if content_h >= 8 else (2 if content_h >= 6 else 0)
-        art_h = max(2, content_h - info_lines - 1)
-        art_w = max(4, min(inner_w - 2, art_h * 2 + 4))
-
-        if target and target.has_cover:
-            art_lines = target.get_pixel_art(art_w, art_h, algorithm=self.dither_algo)
+        title = f"┌─[ 3: LISTENING HISTORY ({len(self.history.entries)}) ]"
+        self._safe_addstr(top, left, f"{title}{'─' * max(0, width - len(title) - 1)}┐", box_attr)
+        content_h = max(0, height - 2)
+        entries = self.history.entries
+        if entries:
+            self.history_cursor = min(self.history_cursor, len(entries) - 1)
         else:
-            art_lines = TrackMetadata.empty_pixel_art(art_w, art_h)
+            self.history_cursor = 0
+        if self.history_cursor < self.history_scroll:
+            self.history_scroll = self.history_cursor
+        elif self.history_cursor >= self.history_scroll + max(1, content_h):
+            self.history_scroll = self.history_cursor - max(1, content_h) + 1
 
-        pad_top = max(0, (content_h - len(art_lines) - info_lines) // 2)
-
-        row_offset = 0
-        for _ in range(pad_top):
-            row_y = top + 1 + row_offset
-            self._safe_addstr(row_y, left, "│" + (" " * inner_w) + "│", box_attr)
-            row_offset += 1
-
-        for art_l in art_lines:
-            if row_offset >= content_h:
-                break
-            row_y = top + 1 + row_offset
-            pad_l = max(0, (inner_w - len(art_l)) // 2)
-            pad_r = max(0, inner_w - len(art_l) - pad_l)
-            line_str = "│" + (" " * pad_l) + art_l + (" " * pad_r) + "│"
-            self._safe_addstr(row_y, left, line_str, curses.A_NORMAL)
-            row_offset += 1
-
-        if info_lines >= 2 and target and row_offset < content_h:
-            row_y = top + 1 + row_offset
-            self._safe_addstr(row_y, left, "│" + (" " * inner_w) + "│", box_attr)
-            row_offset += 1
-
-            if row_offset < content_h:
-                row_y = top + 1 + row_offset
-                t_title = f"{target.artist} - {target.title}"[:inner_w - 2]
-                self._safe_addstr(row_y, left, "│ " + t_title.center(inner_w - 2) + " │", curses.A_BOLD)
-                row_offset += 1
-
-            if row_offset < content_h and info_lines >= 3:
-                row_y = top + 1 + row_offset
-                if target.file_format == "FLAC":
-                    fmt_tag = f"[{target.file_format} {target.bits_per_sample}-bit {target.bitrate}k / {target.sample_rate}Hz]"
-                else:
-                    fmt_tag = f"[{target.file_format} {target.bitrate}k / {target.sample_rate}Hz]"
-                self._safe_addstr(row_y, left, "│ " + fmt_tag.center(inner_w - 2) + " │", curses.A_DIM)
-                row_offset += 1
-
-        while row_offset < content_h:
-            row_y = top + 1 + row_offset
-            self._safe_addstr(row_y, left, "│" + (" " * inner_w) + "│", box_attr)
-            row_offset += 1
-
+        for row in range(content_h):
+            entry_idx = self.history_scroll + row
+            y = top + 1 + row
+            if entry_idx < len(entries):
+                entry = entries[entry_idx]
+                selected = entry_idx == self.history_cursor
+                marker = "▶ " if selected and is_active else ("▷ " if selected else "  ")
+                title_text = entry.get("title", "Unknown Title")
+                artist = entry.get("artist", "Unknown Artist")
+                album = entry.get("album", "")
+                played_at = entry.get("played_at", "")
+                time_text = played_at[11:16] if len(played_at) >= 16 else "--:--"
+                label = f"{marker}{time_text}  {title_text} — {artist}"
+                if album and width >= 42:
+                    label += f"  [{album}]"
+                attr = curses.color_pair(2) | curses.A_BOLD if selected and is_active else (curses.A_BOLD if selected else curses.A_NORMAL)
+                self._safe_addstr(y, left, "│ ", box_attr)
+                self._safe_addstr(y, left + 2, f"{label:<{max(0, width - 4)}}", attr)
+                self._safe_addstr(y, left + width - 1, "│", box_attr)
+            else:
+                self._safe_addstr(y, left, "│" + (" " * max(0, width - 2)) + "│", box_attr)
+        if not entries and content_h:
+            self._safe_addstr(top + 1 + content_h // 2, left + 2, "No listening history yet"[:max(0, width - 4)], curses.A_DIM)
         self._safe_addstr(top + height - 1, left, "└" + ("─" * (width - 2)) + "┘", box_attr)
 
     def _render_playback_box(self, top: int, left: int, height: int, width: int) -> None:
@@ -776,6 +705,8 @@ class PulseApp:
         curr_sec, total_sec, pct = self.audio.get_progress()
         state = self.audio.state
         state_tag = "PLAYING" if state == AudioState.PLAYING else "PAUSED" if state == AudioState.PAUSED else "STOPPED"
+        if self.loop_current_track:
+            state_tag += " ↻"
         title = "┌─[ NOW PLAYING ]"
         self._safe_addstr(top, left, f"{title}{'─' * max(0, width - len(title) - 1)}┐", curses.A_BOLD)
 
@@ -817,6 +748,8 @@ class PulseApp:
                 state_tag = "[PLAY]" if self.audio.state == AudioState.PLAYING else "[PAUSE]"
                 if self.audio.state == AudioState.STOPPED:
                     state_tag = "[STOP]"
+                if self.loop_current_track:
+                    state_tag += "↻"
                 artist_title = f"{track.artist} - {track.title}" if track.artist != "Unknown Artist" else track.title
                 specs = f"[{track.file_format} {track.bitrate}k / {track.channels.upper()}]"
                 avail_title = max(8, info_w - len(state_tag) - len(specs) - 2)
@@ -863,12 +796,13 @@ class PulseApp:
                 vol_lvl = int(self.audio.volume * 10)
                 vol_bar = ("█" * vol_lvl) + ("░" * (10 - vol_lvl))
                 vol_str = f"VOL:[{vol_bar}]"
-                rep_str = f"LOOP:{self.queue.repeat_mode.name}"
+                rep_str = f"LOOP:{'ON' if self.loop_current_track else 'OFF'}"
+                queue_rep = f"QUEUE:{self.queue.repeat_mode.name}"
                 shuf_str = f"SHUF:{'ON' if self.queue.is_shuffled else 'OFF'}"
                 trk_str = f"TRK:{self.queue.current_index + 1:02d}/{self.queue.count:02d}" if self.queue.count else "TRK:--/--"
                 dith_str = f"DITH:{self.dither_algo.value[:3]}"
                 cover_hint = "[V] ART"
-                row3 = f"{vol_str} │ {rep_str} │ {shuf_str} │ {dith_str} │ {trk_str} │ {cover_hint}"
+                row3 = f"{vol_str} │ {rep_str} │ {queue_rep} │ {shuf_str} │ {dith_str} │ {trk_str} │ {cover_hint}"
 
             rows = [row0, row1, row2, row3]
             while len(rows) < inner_h:
@@ -891,6 +825,8 @@ class PulseApp:
                 state_tag = "[PLAY]" if self.audio.state == AudioState.PLAYING else "[PAUSE]"
                 if self.audio.state == AudioState.STOPPED:
                     state_tag = "[STOP]"
+                if self.loop_current_track:
+                    state_tag += "↻"
                 artist_title = f"{track.artist} - {track.title}" if track.artist != "Unknown Artist" else track.title
                 specs = f"[{track.file_format} {track.bitrate}k / {track.channels.upper()}]"
                 avail_w = max(6, width - len(state_tag) - len(specs) - 6)
@@ -933,9 +869,10 @@ class PulseApp:
                 vol_lvl = int(self.audio.volume * 10)
                 vol_bar = ("█" * vol_lvl) + ("░" * (10 - vol_lvl))
                 vol_str = f"VOL:[{vol_bar}]"
-                rep_str = f"LOOP:{self.queue.repeat_mode.name}"
+                rep_str = f"TRACK LOOP:{'ON' if self.loop_current_track else 'OFF'}"
+                queue_rep = f"QUEUE:{self.queue.repeat_mode.name}"
                 cover_hint = "[V] COVER"
-                status_text = f"{vol_str} │ {rep_str} │ {cover_hint}"
+                status_text = f"{vol_str} │ {rep_str} │ {queue_rep} │ {cover_hint}"
 
             self._safe_addstr(top + 3, left, "└" + ("─" * (width - 2)) + "┘", curses.A_NORMAL)
             self._safe_addstr(top + 3, left + 3, f" {status_text} ", curses.A_BOLD)
@@ -1002,7 +939,9 @@ class PulseApp:
 
     def _render_footer(self, y: int, width: int) -> None:
         """High-contrast solid pixel command bar."""
-        cmd_text = " [SPACE] PLAY  [T] DITHER  [L] LYRICS  [V] ART  [TAB] PANE  [+/-] VOL  [?] HELP  [Q] QUIT "
+        clear_label = "HISTORY" if self.active_pane == 2 else "QUEUE" if self.active_pane == 1 else ""
+        clear_hint = f" [C] CLEAR {clear_label}" if clear_label else ""
+        cmd_text = f" [SPACE] PLAY  [L] LOOP  [TAB] PANE  [1/2/3] SELECT{clear_hint}  [+/-] VOL  [?] HELP  [Q] QUIT "
         self._safe_addstr(y, 0, " " * width, curses.color_pair(2))
         self._safe_addstr(y, 0, cmd_text[:width], curses.color_pair(2) | curses.A_BOLD)
 
@@ -1024,20 +963,23 @@ class PulseApp:
             "  + / -          VOLUME UP / DOWN (5%)",
             "  M              MUTE / UNMUTE",
             "  N / P          NEXT / PREV TRACK",
-            "  R              CYCLE REPEAT (OFF -> TRACK -> QUEUE)",
+            "  R              CYCLE QUEUE REPEAT (OFF -> TRACK -> QUEUE)",
+            "  L              TOGGLE LOOP FOR CURRENT SONG",
             "  S              TOGGLE SHUFFLE (BIJECTIVE PERMUTATION)",
             "  T              CYCLE DITHER ALGORITHM (ATKINSON -> FLOYD-S -> BAYER)",
-            "  L              TOGGLE PANE 3 (ALBUM ART <-> SYNCHRONIZED LYRICS)",
+            "  3              OPEN LISTENING HISTORY",
             "  G              TOGGLE REPLAYGAIN LOUDNESS NORMALIZATION",
-            "  V              EXPAND ALBUM ART (FULL IN-CLI MODAL VIEW)",
+            "  V              OPEN COVER ART MODAL",
+            "  C              CLEAR LISTENING HISTORY (WHEN PANE 3 IS ACTIVE)",
             "",
             "NAVIGATION & LIBRARY:",
             "  J / K (UP/DN)  MOVE SELECTION",
             "  ENTER          OPEN DIR / PLAY FILE",
+            "  ENTER          PLAY SELECTED HISTORY ENTRY (PANE 3)",
             "  BACKSPACE / H  ASCEND (PARENT DIRECTORY)",
             "  A              QUEUE FILE OR ENTIRE DIR",
-            "  TAB            CYCLE PANE (FILES -> QUEUE -> ART/LYRICS)",
-            "  1 / 2 / 3      SELECT PANE DIRECTLY (1:FILES, 2:QUEUE, 3:ART/LYRICS)",
+            "  TAB            CYCLE PANE (FILES -> QUEUE -> LISTENING HISTORY)",
+            "  1 / 2 / 3      SELECT PANE DIRECTLY (1:FILES, 2:QUEUE, 3:HISTORY)",
             "  /              SEARCH SONG FILENAMES IN THE FILES PANE",
             "  D / X          REMOVE TRACK FROM QUEUE",
             "  C              CLEAR ALL QUEUE ITEMS",

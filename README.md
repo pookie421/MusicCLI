@@ -207,17 +207,18 @@ Because standard terminal fonts exhibit an aspect ratio of approximately $1:2$ (
 | `N` | Skip to Next | `QueueManager.next_track(auto_advance=False)` |
 | `P` | Previous Track | Rewinds to $0.0\text{ s}$ if $> 3.0\text{ s}$ into track, else previous |
 | `R` | Cycle Repeat Mode | `OFF` $\rightarrow$ `TRACK` $\rightarrow$ `QUEUE` $\rightarrow$ `OFF` |
+| `L` | Toggle Current Track Loop | Repeats the currently playing song until toggled off; the playback display shows `↻` while enabled |
 | `S` | Toggle Shuffle | Toggles Fisher-Yates permutation vector with cursor retention |
 | `O` | Cycle Visualizer | Cycles visualizer: `SPECTRUM` (64-band FFT), `WAVEFORM` (Oscilloscope), `STEREO_VU` (dB meters) |
 | `T` | Cycle Dithering | Cycles halftone mode: `ATKINSON` (Mac 1984 75%), `FLOYD_STEINBERG`, `BAYER` (4x4 ordered) |
-| `L` | Toggle Lyrics / Art | Toggles Pane 3 between 1-Bit Album Art and Synchronized Karaoke Scrolling Lyrics |
 | `G` | Toggle ReplayGain | Enables/disables ReplayGain / EBU R128 loudness normalization ($10^{(G/20)}$ linear scaling) |
 | `V` | In-CLI Cover Modal | Expands high-resolution 1-bit pixel art modal in curses |
-| `Tab` | Switch Focus Pane | Cycles active focus: `1: FILES` $\rightarrow$ `2: QUEUE` $\rightarrow$ `3: ALBUM ART` |
-| `1` / `2` / `3` | Direct Pane Select | Focuses selected pane directly |
+| `Tab` | Switch Focus Pane | Cycles active focus: `1: FILES` $\rightarrow$ `2: QUEUE` $\rightarrow$ `3: LISTENING HISTORY` |
+| `1` / `2` / `3` | Direct Pane Select | Focuses Files, Queue, or Listening History |
 | `j` / `Down` | Cursor Down | Translates UI index $+1$ |
 | `k` / `Up` | Cursor Up | Translates UI index $-1$ |
-| `Enter` / `l` | Activate / Play | Traverses inode or loads selected track into audio engine |
+| `Enter` | Activate / Play | Opens a directory, plays a file, or replays the selected history entry |
+| `C` | Clear Current List | Clears the queue in pane 2 or listening history in pane 3 |
 | `Backspace` / `h` | Ascend Directory | Resolves `path.parent` and re-indexes inode listing |
 | `A` | Recursive Enqueue | Traverses file or directory tree and enqueues supported audio |
 | `/` | Search Songs | Opens the FILES search bar and filters filenames in the current directory as you type |
@@ -225,6 +226,8 @@ Because standard terminal fonts exhibit an aspect ratio of approximately $1:2$ (
 | `C` | Flush Queue | Purges queue vector, calls `AudioEngine.unload()` to free PCM buffers |
 | `?` | Keyboard Matrix | Displays modal curses overlay of keybindings |
 | `Q` | Graceful Exit | Closes CoreAudio device, terminates curses, restores terminal state |
+
+Listening history is stored locally at `~/.pulse-cli/listening_history.json` and keeps the 500 most recent playback sessions.
 
 ---
 
