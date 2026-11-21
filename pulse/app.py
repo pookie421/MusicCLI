@@ -237,8 +237,10 @@ class PulseApp:
             self.set_status("PANE: [3] ALBUM ART")
 
         elif ch == ord('/'):
+            self.active_pane = 0
             self.is_filtering = True
             self.filter_query = ""
+            self._load_directory(self.current_dir)
 
         elif ch in (ord('+'), ord('='), ord(']')):
             vol = self.audio.change_volume(0.05)
@@ -510,13 +512,17 @@ class PulseApp:
         is_active = (self.active_pane == 0)
         box_attr = curses.A_BOLD if is_active else curses.A_DIM
 
-        # Frame Header
-        filt = f" [QUERY: {self.filter_query}]" if self.filter_query else ""
-        title = f"┌─[ 1: FILES {filt}]"
+        # Frame Header and always-visible song search field
+        title = "┌─[ 1: FILES ]"
         rem_w = max(0, width - len(title) - 1)
         self._safe_addstr(top, left, f"{title}{'─' * rem_w}┐", box_attr)
 
-        content_h = height - 2
+        search_label = f"/ Search songs: {self.filter_query}" if self.filter_query else "/ Search songs..."
+        search_text = f"│ {search_label:<{width - 4}} │"
+        search_attr = curses.color_pair(2) | curses.A_BOLD if self.is_filtering else curses.A_BOLD
+        self._safe_addstr(top + 1, left, search_text, search_attr)
+
+        content_h = height - 3
         count = len(self.browser_items)
 
         if self.browser_cursor < self.browser_scroll:
@@ -525,7 +531,7 @@ class PulseApp:
             self.browser_scroll = self.browser_cursor - content_h + 1
 
         for idx in range(content_h):
-            row_y = top + 1 + idx
+            row_y = top + 2 + idx
             item_idx = self.browser_scroll + idx
 
             if item_idx < count:
@@ -1010,7 +1016,7 @@ class PulseApp:
             "  A              QUEUE FILE OR ENTIRE DIR",
             "  TAB            CYCLE PANE (FILES -> QUEUE -> ART/LYRICS)",
             "  1 / 2 / 3      SELECT PANE DIRECTLY (1:FILES, 2:QUEUE, 3:ART/LYRICS)",
-            "  /              ACTIVATE SEARCH FILTER",
+            "  /              SEARCH SONG FILENAMES IN THE FILES PANE",
             "  D / X          REMOVE TRACK FROM QUEUE",
             "  C              CLEAR ALL QUEUE ITEMS",
             "  Q              QUIT",

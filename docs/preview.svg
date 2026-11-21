@@ -39,19 +39,19 @@
     <!-- Split View (Files vs Queue) -->
     <!-- Left: Files -->
     <text x="0" y="52" class="t-bold">┌─[ 1: FILES ]──────────────────────────────┐</text>
-    <text x="0" y="70" class="t-dim">│  [DIR] ..                                 │</text>
-    <text x="0" y="88" class="t-norm">│  [DIR] Phonk/                             │</text>
-    <text x="0" y="106" class="t-norm">│  [DIR] Synthwave/                         │</text>
+    <text x="0" y="70" class="t-bold">│ / Search songs...                        │</text>
+    <text x="0" y="88" class="t-dim">│  [DIR] ..                                 │</text>
+    <text x="0" y="106" class="t-norm">│  [DIR] Phonk/                             │</text>
+    <text x="0" y="124" class="t-norm">│  [DIR] Synthwave/                         │</text>
 
     <!-- Highlighted Active Cursor -->
-    <rect x="18" y="111" width="372" height="18" class="inv-bg" />
-    <text x="0" y="124" class="t-bold">│</text>
-    <text x="22" y="124" class="inv-tx">▶ [FLAC] phonky-business.flac</text>
-    <text x="390" y="124" class="t-bold">│</text>
+    <rect x="18" y="129" width="372" height="18" class="inv-bg" />
+    <text x="0" y="142" class="t-bold">│</text>
+    <text x="22" y="142" class="inv-tx">▶ [FLAC] phonky-business.flac</text>
+    <text x="390" y="142" class="t-bold">│</text>
 
-    <text x="0" y="142" class="t-norm">│  [MP3]  phonky-business.mp3               │</text>
-    <text x="0" y="160" class="t-norm">│  [MP3]  0405 (2).MP3.mp3                  │</text>
-    <text x="0" y="178" class="t-norm">│  [DIR]  Downloads/                        │</text>
+    <text x="0" y="160" class="t-norm">│  [MP3]  phonky-business.mp3               │</text>
+    <text x="0" y="178" class="t-norm">│  [MP3]  0405 (2).MP3.mp3                  │</text>
     <text x="0" y="196" class="t-bold">└───────────────────────────────────────────┘</text>
 
     <!-- Right: Queue -->
